@@ -1,6 +1,6 @@
 # google_play_store_spider
 抓取 google play store 資料  use Scrapy on python
-* [Demo Video]() - Linux 
+* [Demo Video](https://youtu.be/oOSefZYGvf8) - Linux 
 
 ## 特色
 * 抓取 google play store 資料 (熱門排行榜 最新發佈) 前100筆資料
