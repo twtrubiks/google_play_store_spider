@@ -1,68 +1,108 @@
-#coding=utf8
+# -*- coding: utf-8 -*-
 from google_play_spider.items import GooglePlaySpiderItem
 import scrapy
 
-class PttSpider(scrapy.Spider):
-      name = "playspider"      
-      start_urls = ["https://play.google.com/store/apps/top",
-                    "https://play.google.com/store/apps/new"] 
+class GooglePlaySpider(scrapy.Spider):
+      name = "playspider"
+      start_urls = [
+          "https://play.google.com/store/apps",  # 主頁面
+          "https://play.google.com/store/games",  # 遊戲分類
+      ]
 
-      def parse(self, response):  
-          #取得 顯示更多內容 URL
-          for url in response.xpath('//a[@class="see-more play-button small id-track-click apps id-responsive-see-more"]'):
-              targetURL = "https://play.google.com" + url.xpath('@href')[0].extract()
-              #使用POST , 抓資料 100 筆
-              yield  scrapy.FormRequest(               
-                     targetURL,
-                     formdata = {'start':'0',
-                                 'num':'100',
-                                 'numChildren':'0',
-                                 'cctcss':'square-cover',
-                                 'cllayout':'NORMAL',
-                                 'ipf':'1',
-                                 'xhr':'1',
-                                 'token':'zNTXc17yBEzmbkMlpt4eKj14YOo:1458833715345'},
-                    callback = self.parse_data
-                 )
+      def parse(self, response):
+          """
+          解析起始頁面，找出應用程式連結
+
+          @url https://play.google.com/store/apps
+          @returns requests 0 50
+          """
+          # 取得應用程式連結
+          app_links = response.css('a[href*="/store/apps/details"]::attr(href)').getall()
+
+          if not app_links:
+              # 如果沒有找到連結，嘗試其他選擇器
+              app_links = response.xpath('//a[contains(@href, "/store/apps/details")]/@href').getall()
+
+          self.logger.info(f"找到 {len(app_links)} 個應用程式連結")
+
+          # 限制抓取數量，先測試前 50 個
+          for link in app_links[:50]:
+              if link:
+                  full_url = response.urljoin(link)
+                  yield scrapy.Request(full_url, callback=self.parse_app)
 
 
-      def parse_data(self, response):  
-          #抓取各項資料 使用xpath時,如要抓取一層內的一層,請一層一層往下抓,不要用跳的,不然會抓不到
+      def parse_app(self, response):
+          """
+          解析單個應用程式頁面
+
+          @returns items 1
+          @scrapes title price autor description
+          """
+          # 使用 CSS 選擇器提取資料
           playitem = GooglePlaySpiderItem()
-          table_title = response.xpath('//div[@class="cluster-heading"]/h2/text()')[0].extract().strip()
-          for object_per in response.xpath('//div[@class="card no-rationale square-cover apps small"]/div[@class="card-content id-track-click id-track-impression"]'):
-             title = object_per.xpath('div[@class="details"]/a[@class="title"]/text()')[0].extract()
-             #print 'title:',title
-             title_URL = 'https://play.google.com' + object_per.xpath('div[@class="details"]/a/@href')[0].extract()
-             #print 'targrt_URL:',title_URL
-             imgURL = 'https:' + object_per.xpath('div[@class="cover"]/div/div/div/img/@data-cover-large')[0].extract()
-             #print 'imgURL:', imgURL
-             description_list = object_per.xpath('div[@class="details"]/div[@class="description"]/text()')[0].extract()
-             description = ''.join(description_list)
-             #print 'description',description
-             autor = object_per.xpath('div[@class="details"]/div[@class="subtitle-container"]/a/text()')[0].extract()
-             #print 'autor:', autor
-             autor_URL = 'https://play.google.com' + object_per.xpath('div[@class="details"]/div[@class="subtitle-container"]/a/@href')[0].extract()
-             #print 'autor_URL:', autor_URL
-             try:
-               star = object_per.xpath('div[@class="reason-set"]/span/a/div/div/@aria-label')[0].extract()
-             except:
-               star = 'no star_rate'
-             star_rates = star
-             #print 'star rates:',star_rates
-             price = object_per.xpath('div[@class="details"]/div[@class="subtitle-container"]/span/span[2]/button/span/text()')[0].extract()
-             #print 'price:', price
-             #print '================================================='
 
-             playitem['title'] = title.strip()
-             playitem['title_URL'] = title_URL.strip()
-             playitem['imgURL'] = imgURL.strip()
-             playitem['description'] = description.strip()
-             playitem['autor'] = autor.strip()
-             playitem['autor_URL'] = autor_URL.strip()
-             playitem['star_rates'] = star_rates.strip()
-             playitem['price'] = price.strip()
-             playitem['table_title']= table_title.strip()
-             yield playitem
-            
+          # 標題
+          title = response.css('h1[itemprop="name"] span::text').get()
+          if not title:
+              title = response.css('h1 span::text').get()
+
+          # 開發者
+          autor = response.css('div.Vbfug a span::text').get()
+          if not autor:
+              autor = response.css('a[href*="/store/apps/dev"] span::text').get()
+
+          # 價格
+          price = response.css('button[aria-label*="Buy"] span::text').get()
+          if not price:
+              price = response.css('button[aria-label*="Install"]::text').get()
+              if price and 'Install' in price:
+                  price = 'Free'
+          if not price:
+              price = 'Free'
+
+          # 評分
+          star_rating = response.css('div[role="img"][aria-label*="star"]::attr(aria-label)').get()
+          if not star_rating:
+              star_rating = response.css('div.TT9eCd::text').get()
+          if not star_rating:
+              star_rating = 'No rating'
+
+          # 描述
+          description_texts = response.xpath('//div[@data-g-id="description"]//text()').getall()
+          if description_texts:
+              description = ' '.join(description_texts).strip()
+          else:
+              description = ''
+
+          # 圖片 URL
+          img_url = response.css('img[alt*="Icon"][src*="play-lh.googleusercontent.com"]::attr(src)').get()
+          if not img_url:
+              img_url = response.css('img[itemprop="image"]::attr(src)').get()
+
+          # 開發者 URL
+          autor_url = response.css('div.Vbfug a::attr(href)').get()
+          if autor_url:
+              autor_url = response.urljoin(autor_url)
+          else:
+              autor_url = ''
+
+          # 分類（從 URL 或頁面中提取）
+          category = response.css('a[itemprop="genre"]::text').get()
+          if not category:
+              category = 'Apps'
+
+          # 填充 Item
+          playitem['title'] = title.strip() if title else 'Unknown'
+          playitem['title_URL'] = response.url
+          playitem['imgURL'] = img_url if img_url else ''
+          playitem['description'] = description[:500] if description else ''  # 限制描述長度
+          playitem['autor'] = autor.strip() if autor else 'Unknown'
+          playitem['autor_URL'] = autor_url
+          playitem['star_rates'] = star_rating.strip() if star_rating else 'No rating'
+          playitem['price'] = price.strip() if price else 'Free'
+          playitem['table_title'] = category.strip() if category else 'Apps'
+
+          yield playitem
+
 
